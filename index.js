@@ -99,6 +99,10 @@ const setHeaders = (result, response) => {
   while ((pos = result.contents.indexOf('\r\n')) > -1) {
     let headerLine = result.contents.substr(0, pos);
     result.contents = result.contents.substr(pos + 2);
+
+    if (!headerLine)
+      break;
+
     extractHeader(headerLine);
   }
 
@@ -120,13 +124,11 @@ const processResult = (contents, res) => {
 };
 
 module.exports = (opts = {}) => {
-  if (typeof opts === 'string') {
+  if (typeof opts === 'string')
     opts = { docRoot: opts };
-  }
 
-  if (!opts.script) {
+  if (!opts.script)
     opts.script = 'index.php';
-  }
 
   console.info('[node-phpcgi] scriptFile: ' + path.join(opts.docRoot, opts.script));
 
