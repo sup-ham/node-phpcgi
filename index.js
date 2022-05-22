@@ -3,141 +3,138 @@
  * @license 		MIT
  */
 
-let URL = require('url');
-let child = require('child_process');
-let path = require('path');
-let fs = require('fs');
+const path = require('path')
+const fs = require('fs')
 
 
-const phpcgi = ({ bin, script, docRoot, req, env }) => {
-  let url = URL.parse(req.url)
-  let scriptFile = path.join(docRoot, script);
+const phpcgi = ({ bin = 'php-cgi', script, docRoot, req, env }) => {
+  let scriptFile = path.join(docRoot, script)
   let pathinfo = '';
 
   env = Object.assign({
-    SERVER_SIGNATURE: 'NodeJS server at localhost',
     PATH_INFO: pathinfo,
     SCRIPT_NAME: script,
     SCRIPT_FILENAME: scriptFile,
     SCRIPT_URL: req.url,
     REQUEST_URI: req.url,
     REQUEST_METHOD: req.method,
-    QUERY_STRING: url.query || '',
-    CONTENT_TYPE: req.get('Content-Type') || '',
-    CONTENT_LENGTH: req.get('Content-Length') || 0,
-    REMOTE_USER: '',
-    SERVER_SOFTWARE: 'NodeJS',
-    SERVER_NAME: req.headers.host.split(':')[0] || 'localhost',
-    SERVER_ADDR: req.socket.address().host || '127.0.0.1',
-    SERVER_PORT: req.socket.address().port || 8011,
+    QUERY_STRING: req._parsedUrl.query,
+    CONTENT_TYPE: req.headers['content-type'],
+    CONTENT_LENGTH: req.headers['content-length'],
+    SERVER_SOFTWARE: 'NodeJS/PHPCGI',
+    SERVER_NAME: req.headers.host.split(':')[0],
+    SERVER_ADDR: req.socket.address().address,
+    SERVER_PORT: req.socket.address().port,
     GATEWAY_INTERFACE: 'CGI/1.1',
-    SERVER_PROTOCOL: '',
-    REMOTE_ADDR: req.ip || '',
-    REMOTE_PORT: '',
+    REMOTE_ADDR: req.connection.remoteAddress,
+    REMOTE_PORT: req.connection.remotePort,
     DOCUMENT_ROOT: docRoot,
-    REDIRECT_STATUS: 1
-  }, env);
+    REDIRECT_STATUS: 1,
+    X_ORIGINAL_URL: req.originalUrl,
+  }, env)
 
-  Object.keys(req.headers).map(x => env['HTTP_' + x.toUpperCase().replace('-', '_')] = req.headers[x]);
+  Object.keys(req.headers).map(x => env['HTTP_' + x.toUpperCase().replace('-', '_')] = req.headers[x])
 
-  let process, res = '', err = '';
-
-  process = child.spawn(bin || 'php-cgi', [], { env });
+  let res = '', err = '';
+  const process = require('child_process').spawn(bin, [], { env })
 
   process.stdin.on('error', err => {
     console.error("[node-phpcgi] Error from php cgi: " + err)
-  });
+  })
 
-  req.pipe(process.stdin);
-  req.resume();
+  req.pipe(process.stdin)
+  req.resume()
 
   process.stdout.on('data', data => {
-    res += data.toString();
-  });
+    res += data.toString()
+  })
 
   process.stderr.on('data', data => {
-    err += data.toString();
-  });
+    err += data.toString()
+  })
 
   process.on('error', err => {
     console.error("[node-phpcgi] Error from php cgi: " + err)
-  });
+  })
 
   return new Promise((resolve, reject) => {
     process.on('exit', _ => {
-      process.stdin.end();
-      resolve(res);
-    });
-  });
+      process.stdin.end()
+      resolve(res)
+    })
+  })
 }
 
 
-let headers = {};
+let headers = {}
 
 const extractHeader = (hdrLine) => {
-  let pair = hdrLine.split(': ');
+  const pair = hdrLine.split(': ')
 
   if (pair.length < 2) {
-    return;
+    return
   }
 
   if (headers[pair[0]]) {
     if (!Array.isArray(headers[pair[0]])) {
-      headers[pair[0]] = [headers[pair[0]]];
+      headers[pair[0]] = [headers[pair[0]]]
     }
-    headers[pair[0]].push(headers[pair[1]]);
+    headers[pair[0]].push(headers[pair[1]])
   }
   else {
-    headers[pair[0]] = pair[1];
+    headers[pair[0]] = pair[1]
   }
 }
 
 const setHeaders = (result, response) => {
-  headers = {};
+  headers = {}
 
-  let pos;
+  let pos
   while ((pos = result.contents.indexOf('\r\n')) > -1) {
-    let headerLine = result.contents.substr(0, pos);
-    result.contents = result.contents.substr(pos + 2);
-    extractHeader(headerLine);
+    let headerLine = result.contents.substr(0, pos)
+    result.contents = result.contents.substr(pos + 2)
+
+    if (!headerLine)
+      break
+
+    extractHeader(headerLine)
   }
 
   for (let [key, value] of Object.entries(headers)) {
-    response.setHeader(key, value);
+    response.setHeader(key, value)
 
     if (key === 'Status') {
-      response.statusCode = parseInt(value);
-      response.status(response.statusCode);
+      response.statusCode = parseInt(value)
     }
   }
 }
 
 const processResult = (contents, res) => {
-  const result = { contents };
-  setHeaders(result, res);
-  res.send(result.contents);
-  res.end();
-};
+  const result = { contents }
+  setHeaders(result, res)
+  res.end(result.contents)
+}
 
 module.exports = (opts = {}) => {
-  if (typeof opts === 'string') {
-    opts = { docRoot: opts };
-  }
+  if (typeof opts === 'string')
+    opts = { docRoot: opts }
 
-  if (!opts.script) {
+  if (opts.docRoot[0] !== '/' && !opts.docRoot.match(/^[A-z]:/))
+    opts.docRoot = path.join(process.cwd(), opts.docRoot)
+
+  if (!opts.script)
     opts.script = 'index.php';
-  }
 
-  console.info('[node-phpcgi] scriptFile: ' + path.join(opts.docRoot, opts.script));
+  console.info('[node-phpcgi] scriptFile: ' + path.join(opts.docRoot, opts.script))
 
   return (req, res, next) => {
     opts.req = req
-    req.pause();
+    req.pause()
 
     fs.stat(path.join(opts.docRoot, opts.script), (err, stat) => {
-      if (err || !stat.isFile) next();
-      opts.script = '/' + opts.script.replace(/^\/+/, '');
-      phpcgi(opts).then(c => processResult(c, res));
-    });
-  };
-};
+      if (err || !stat.isFile) next()
+      opts.script = '/' + opts.script.replace(/^\/+/, '')
+      phpcgi(opts).then(c => processResult(c, res))
+    })
+  }
+}
